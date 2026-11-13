@@ -138,10 +138,9 @@ def parse(lines: Iterable[str]) -> Iterator[Record]:
             buf = [line[12:]]
         else:
             buf.append(line[12:])
-    if rec is not None:  # text cut off without a final //
-        flush_qual()
-        flush_block()
-        yield rec
+    # A record without its closing // was cut off mid-response: dropped, so a
+    # partial record never replaces a stored one. Callers see a short batch
+    # and retry.
 
 
 def parse_text(text: str) -> list[Record]:

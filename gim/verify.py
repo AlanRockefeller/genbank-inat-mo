@@ -25,8 +25,16 @@ _TAGS = re.compile(r"<[^>]+>")
 _DNA = re.compile(r"^[ACGTURYKMSWBDHVN\s-]{80,}$", re.I)
 
 
+_LINK_ATTR = re.compile(r"""(?:href|src)\s*=\s*["']([^"']*)["']""", re.I)
+
+
 def _plain(s) -> str:
-    return html.unescape(_TAGS.sub(" ", str(s or ""))).strip()
+    """HTML to text, keeping link targets: an accession often appears only in
+    <a href=".../nuccore/AB123456">GenBank</a>."""
+    def tag(m: re.Match) -> str:
+        return " " + " ".join(_LINK_ATTR.findall(m.group(0))) + " "
+
+    return html.unescape(_TAGS.sub(tag, str(s or ""))).strip()
 
 
 def _todo(con: sqlite3.Connection, site: str, refresh: bool, max_age_days: float | None) -> list[int]:
@@ -74,11 +82,13 @@ def _inat_summary(r: dict) -> dict:
     ofvs = []
     for o in r.get("ofvs") or []:
         name, value = str(o.get("name") or ""), str(o.get("value") or "")
+        accs = accessions_in(value)
         if _DNA.match(value) or "dna barcode" in name.lower():
             has_seq = has_seq or bool(value.strip())
-            ofvs.append((name, f"<{len(value)} bp>"))
+            # Free text; people sometimes paste the accession here instead.
+            text_acc |= accs
+            ofvs.append((name, f"<{len(value)} chars>" if _DNA.match(value) else value[:200]))
             continue
-        accs = accessions_in(value)
         # Any observation field holding an accession counts as structured:
         # "Genbank Accession Number", "GenBank number (URL)", "Accession", ...
         if accs and re.search(r"genbank|accession|ncbi|sequence", name, re.I):

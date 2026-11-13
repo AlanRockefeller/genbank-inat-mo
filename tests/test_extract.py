@@ -72,3 +72,33 @@ def test_parser_and_fields():
     assert rec.qualifier("specimen_voucher") == "DUKE:0351597"
     got = {(r.site, r.obs_id, r.field) for r in find_in_fields(rec.fields)}
     assert got == {("mo", 255212, "source/note"), ("inat", 98565406, "source/note")}
+
+
+def test_unterminated_record_is_dropped():
+    cut = GB.split("ORIGIN")[0]  # response cut off before the closing //
+    assert genbank.parse_text(cut) == []
+    assert len(genbank.parse_text(GB + cut)) == 1
+
+
+def test_accessions_in():
+    from gim.extract import accessions_in
+
+    assert accessions_in("see ol342397.1 and PV766129") == {"OL342397", "PV766129"}
+    assert accessions_in("WGS JAABCD010000000.1 and ABKACV000000000.3") == {"JAABCD010000000", "ABKACV000000000"}
+    assert accessions_in("NR_173054.1") == {"NR_173054"}
+    assert accessions_in("ACGTACGTACGTAAAACCCGGGTTT") == set()
+
+
+def test_fasta_accession():
+    from gim.harvest import fasta_accession
+
+    assert fasta_accession("OL342397.1") == "OL342397.1"
+    assert fasta_accession("gb|OL342397.1|LOCUS1") == "OL342397.1"
+    assert fasta_accession("gi|123|gb|OL342397.1|") == "OL342397.1"
+    assert fasta_accession("gi|123|") == ""
+
+
+def test_html_link_targets_kept():
+    from gim.verify import _plain
+
+    assert "AB123456" in _plain('<a href="https://www.ncbi.nlm.nih.gov/nuccore/AB123456">GenBank</a>')

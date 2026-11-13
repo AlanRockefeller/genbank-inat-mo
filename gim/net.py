@@ -11,7 +11,7 @@ import urllib.request
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = "genbank-inat-mo/0.1 (GenBank voucher cross-check; read-only)"
+USER_AGENT = "genbank-sequence-miner/0.1 (GenBank voucher cross-check; read-only; +https://github.com/AlanRockefeller/genbank-sequence-miner)"
 RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
 
 

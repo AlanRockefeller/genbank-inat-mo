@@ -1,5 +1,5 @@
 [project]
-name = "genbank-inat-mo"
+name = "genbank-sequence-miner"
 version = "0.1.0"
 description = "Find iNaturalist and Mushroom Observer observation numbers in GenBank and check them against both sites"
 requires-python = ">=3.10"

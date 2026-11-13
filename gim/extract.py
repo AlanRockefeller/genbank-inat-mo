@@ -42,8 +42,11 @@ _MO_PREFIX = re.compile(
     re.I,
 )
 
-# GenBank accessions (nucleotide): 1 letter + 5 digits, 2 letters + 6/8 digits, etc.
-ACCESSION = re.compile(r"\b([A-Z]{1,2}\d{5,8}|[A-Z]{2}_\d{6,9})(?:\.\d+)?\b")
+# Nucleotide accessions: 1 letter + 5 digits, 2 letters + 6 or 8 digits,
+# RefSeq (NR_123456), and WGS/TSA (4 letters + 8-10 digits, 6 letters + 9-11 digits).
+ACCESSION = re.compile(
+    r"\b([A-Z]{1,2}\d{5,8}|[A-Z]{2}_\d{6,9}|[A-Z]{4}\d{8,10}|[A-Z]{6}\d{9,11})(?:\.\d+)?\b"
+)
 
 
 @dataclass(frozen=True)
@@ -105,4 +108,4 @@ def find_in_fields(fields: list[tuple[str, str]]) -> list[Ref]:
 
 def accessions_in(text: str) -> set[str]:
     """Version-less, upper-case GenBank-style accessions found in free text."""
-    return {m.group(1).upper() for m in ACCESSION.finditer(text or "")}
+    return {m.group(1) for m in ACCESSION.finditer((text or "").upper())}

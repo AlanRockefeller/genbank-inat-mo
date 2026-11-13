@@ -11,7 +11,7 @@ from .net import Throttle, request
 log = logging.getLogger(__name__)
 
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-TOOL = "genbank-inat-mo"
+TOOL = "genbank-sequence-miner"
 
 
 @dataclass
@@ -107,21 +107,6 @@ class Ncbi:
         body = self._call(
             "efetch.fcgi",
             {"db": "nuccore", "id": ",".join(ids), "rettype": "gb", "retmode": "text"},
-        )
-        return self._check_text(body)
-
-    def genbank_by_history(self, s: Search, start: int, size: int) -> str:
-        body = self._call(
-            "efetch.fcgi",
-            {
-                "db": "nuccore",
-                "WebEnv": s.webenv,
-                "query_key": s.query_key,
-                "rettype": "gb",
-                "retmode": "text",
-                "retstart": str(start),
-                "retmax": str(size),
-            },
         )
         return self._check_text(body)
 

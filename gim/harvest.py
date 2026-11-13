@@ -197,15 +197,15 @@ class Harvester:
         t0 = time.monotonic()
         done_recs = done_refs = 0
 
-        def work(ids: list[str]):
-            return ids, genbank.parse_text(self.ncbi.genbank_by_ids(ids))
-
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            for i, (ids, recs) in enumerate(pool.map(work, batches), 1):
-                if len(recs) < len(ids):
-                    log.debug("batch returned %d of %d records", len(recs), len(ids))
+            for i, (ok, missing, recs) in enumerate(pool.map(self._fetch_batch, batches), 1):
                 n_rec, n_ref = store_records(self.con, recs, extract.find_in_fields)
-                self.con.executemany("UPDATE candidates SET fetched = 1 WHERE id = ?", [(x,) for x in ids])
+                self.con.executemany("UPDATE candidates SET fetched = 1 WHERE id = ?", [(x,) for x in ok])
+                # NCBI returned nothing for these, even one at a time
+                # (suppressed or withdrawn): recorded as unavailable, not fetched.
+                self.con.executemany("UPDATE candidates SET fetched = 2 WHERE id = ?", [(x,) for x in missing])
+                if missing:
+                    log.warning("fetch: no record returned for %s", ", ".join(missing[:10]))
                 self.con.commit()
                 done_recs += n_rec
                 done_refs += n_ref
@@ -217,62 +217,62 @@ class Harvester:
                         i, len(batches), done_recs, done_refs, rate, max(0, left) / 60,
                     )
 
+    def _fetch_batch(self, ids: list[str]) -> tuple[list[str], list[str], list[genbank.Record]]:
+        """Worker thread: fetch `ids`, returning (fetched ids, ids NCBI has no
+        record for, records). Returned records carry accessions, not the
+        requested ids, so a short batch is retried once and then split in half
+        until the ids that return nothing are isolated."""
+        recs = genbank.parse_text(self.ncbi.genbank_by_ids(ids))
+        if len(recs) >= len(ids):
+            return ids, [], recs
+        recs = genbank.parse_text(self.ncbi.genbank_by_ids(ids))
+        if len(recs) >= len(ids):
+            return ids, [], recs
+        if len(ids) == 1:
+            return [], ids, []
+        log.debug("batch of %d returned %d records; splitting", len(ids), len(recs))
+        mid = len(ids) // 2
+        a_ok, a_miss, a_recs = self._fetch_batch(ids[:mid])
+        b_ok, b_miss, b_recs = self._fetch_batch(ids[mid:])
+        return a_ok + b_ok, a_miss + b_miss, a_recs + b_recs
+
     # ---- deep scan of an arbitrary query ----------------------------------
-    def scan(self, query: str, batch: int = 500, workers: int = 3) -> None:
-        """Fetch every record matching `query` and extract refs, without the
-        candidate step. Resumable: progress is saved per batch."""
+    def scan(self, query: str, batch: int = 200, workers: int = 3) -> None:
+        """Fetch every record matching `query` and extract refs.
+
+        The query's UIDs are saved as candidates first, then fetched like any
+        other candidate. Resuming therefore works from that saved list, not
+        from an offset into a new search whose results may have changed."""
         row = self.con.execute("SELECT * FROM searches WHERE term = ?", (query,)).fetchone()
-        start = 0 if (row is None or self.refresh) else row["progress"]
-        if row is not None and row["done"] and not self.refresh:
-            log.info("scan already complete (%d records); use --refresh to redo", row["count"])
-            return
-        s = self.ncbi.esearch(query)
-        log.info("scan: %d records match; starting at %d", s.count, start)
-        self.con.execute(
-            "INSERT OR REPLACE INTO searches (term, purpose, count, progress, done) VALUES (?, 'scan', ?, ?, 0)",
-            (query, s.count, start),
-        )
-        self.con.commit()
-        t0 = time.monotonic()
-        starts = list(range(start, s.count, batch))
-
-        def work(pos: int):
-            for attempt in range(3):
-                text = self.ncbi.genbank_by_history(s, pos, batch)
-                recs = genbank.parse_text(text)
-                want = min(batch, s.count - pos)
-                if len(recs) >= want or attempt == 2:
-                    if len(recs) < want:
-                        log.warning("scan batch at %d: got %d of %d records", pos, len(recs), want)
-                    return pos, recs
-                log.warning("scan batch at %d short (%d/%d); retrying", pos, len(recs), want)
-            raise AssertionError("unreachable")
-
-        n_refs = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            # map() keeps order, so progress only ever moves past finished batches.
-            for i, (pos, recs) in enumerate(pool.map(work, starts), 1):
-                _, r = store_records(self.con, recs, extract.find_in_fields)
-                n_refs += r
-                self.con.execute(
-                    "UPDATE searches SET progress = ?, updated_at = datetime('now') WHERE term = ?",
-                    (pos + batch, query),
+        if row is None or not row["done"] or self.refresh:
+            s = self.ncbi.esearch(query)
+            if s.truncated:
+                raise SystemExit(
+                    f"scan: Entrez truncated a wildcard in {query!r} ({'; '.join(s.warnings)}). "
+                    "Lengthen the wildcard root, or split the query into several scans."
                 )
-                self.con.commit()
-                if i % 20 == 0:
-                    done = pos + batch - start
-                    rate = done / max(1e-6, time.monotonic() - t0)
-                    log.info(
-                        "scan: %d/%d records, %d refs found (%.0f rec/s, ~%.0f min left)",
-                        min(pos + batch, s.count), s.count, n_refs, rate, (s.count - pos) / max(rate, 1e-6) / 60,
-                    )
-        self.con.execute("UPDATE searches SET done = 1, progress = ? WHERE term = ?", (s.count, query))
-        self.con.commit()
-        log.info("scan complete: %d records, %d refs", s.count, n_refs)
+            log.info("scan: %d records match; saving their UIDs", s.count)
+            new = self._collect(s, "scan")
+            log.info("scan: %d UIDs not seen before", new)
+        self.fetch_candidates(batch, workers)
 
 
 # ---- FASTA titles (cross-check) -------------------------------------------
 _FASTA_ACC = re.compile(r"^>(\S+)")
+# NCBI FASTA id tags whose next field is an accession(.version).
+_SEQID_TAGS = {"gb", "emb", "dbj", "ref", "tpg", "tpe", "tpd", "gpp", "pdb", "lcl"}
+
+
+def fasta_accession(seqid: str) -> str:
+    """'OL342397.1' -> 'OL342397.1'; 'gb|OL342397.1|LOCUS' and
+    'gi|123|gb|OL342397.1|' -> 'OL342397.1'. Empty if none is found."""
+    if "|" not in seqid:
+        return seqid
+    parts = seqid.split("|")
+    for i, p in enumerate(parts[:-1]):
+        if p.lower() in _SEQID_TAGS and parts[i + 1]:
+            return parts[i + 1]
+    return ""
 
 
 def load_fasta_titles(con: sqlite3.Connection, path: str) -> tuple[int, int]:
@@ -293,8 +293,9 @@ def load_fasta_titles(con: sqlite3.Connection, path: str) -> tuple[int, int]:
             refs = extract.find_in_text(line[m.end() :].strip(), "FASTA title")
             if not refs:
                 continue
-            acc_ver = m.group(1).split("|")[-1] or m.group(1)
-            acc = acc_ver.split(".")[0]
+            acc = fasta_accession(m.group(1)).split(".")[0]
+            if not acc:
+                continue
             n_titles += 1
             for r in refs:
                 rows.append((acc, r.site, r.obs_id, r.kind))

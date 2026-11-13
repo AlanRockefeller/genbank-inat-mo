@@ -1,4 +1,4 @@
-# genbank-inat-mo
+# GenBank sequence miner
 
 Finds every GenBank nucleotide record that cites an iNaturalist or Mushroom
 Observer observation number, then checks each observation on iNaturalist and
@@ -8,7 +8,7 @@ It only reads from NCBI, iNaturalist and MO and never writes to them. It uses
 only the Python standard library (3.10+).
 
 ```bash
-cd ~/code/genbank-inat-mo
+git clone https://github.com/AlanRockefeller/genbank-sequence-miner && cd genbank-sequence-miner
 export NCBI_API_KEY=...        # optional; 10 requests/s instead of 3
 python3 -m gim run             # search + fetch + verify + report
 xdg-open report/index.html

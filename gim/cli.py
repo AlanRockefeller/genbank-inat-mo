@@ -23,6 +23,13 @@ def _ncbi(args) -> Ncbi:
     return Ncbi(api_key=key or None, email=os.environ.get("NCBI_EMAIL") or None)
 
 
+def _positive(s: str) -> int:
+    n = int(s)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="gim", description=__doc__)
     p.add_argument("--db", default="data/gim.sqlite", help="SQLite state file (default: %(default)s)")
@@ -35,13 +42,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--only", choices=["keywords", "wildcards"], help="run one kind only")
 
     f = sub.add_parser("fetch", help="download candidate records as GenBank text and extract numbers")
-    f.add_argument("--batch", type=int, default=200)
-    f.add_argument("--workers", type=int, default=3)
+    f.add_argument("--batch", type=_positive, default=200)
+    f.add_argument("--workers", type=_positive, default=3)
 
     sc = sub.add_parser("scan", help="fetch EVERY record matching an Entrez query (deep recall check)")
     sc.add_argument("query")
-    sc.add_argument("--batch", type=int, default=500)
-    sc.add_argument("--workers", type=int, default=3)
+    sc.add_argument("--batch", type=_positive, default=200)
+    sc.add_argument("--workers", type=_positive, default=3)
     sc.add_argument("--refresh", action="store_true", help="start over instead of resuming")
 
     fa = sub.add_parser("fasta", help="cross-check: extract numbers from a FASTA file's titles and queue those records")

@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("search", help="run the Entrez keyword and wildcard searches")
-    s.add_argument("--refresh", action="store_true", help="rerun searches already done")
+    s.add_argument("--refresh", action="store_true", help="rerun searches already done and re-download every record they match")
     s.add_argument("--only", choices=["keywords", "wildcards"], help="run one kind only")
 
     f = sub.add_parser("fetch", help="download candidate records as GenBank text and extract numbers")
@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("query")
     sc.add_argument("--batch", type=_positive, default=200)
     sc.add_argument("--workers", type=_positive, default=3)
-    sc.add_argument("--refresh", action="store_true", help="start over instead of resuming")
+    sc.add_argument("--refresh", action="store_true", help="rerun the search and re-download every record it matches")
 
     fa = sub.add_parser("fasta", help="cross-check: extract numbers from a FASTA file's titles and queue those records")
     fa.add_argument("path")

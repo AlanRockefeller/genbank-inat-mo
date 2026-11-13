@@ -85,15 +85,24 @@ class Harvester:
             "SELECT * FROM searches WHERE term = ? AND done = 1", (term,)
         ).fetchone()
 
+    def _add_candidates(self, ids: list[str], source: str) -> int:
+        """Queue UIDs for fetching; returns how many were new. With --refresh,
+        UIDs already fetched are queued again, so a refreshed search really
+        downloads the current version of every record it matches."""
+        cur = self.con.executemany(
+            "INSERT OR IGNORE INTO candidates (id, source) VALUES (?, ?)",
+            [(u, source) for u in ids],
+        )
+        new = cur.rowcount
+        if self.refresh:
+            self.con.executemany("UPDATE candidates SET fetched = 0 WHERE id = ?", [(u,) for u in ids])
+        return new
+
     def _collect(self, s: Search, purpose: str) -> int:
         new = 0
         if s.count:
             for chunk in _chunks(self.ncbi.uids(s), 5000):
-                cur = self.con.executemany(
-                    "INSERT OR IGNORE INTO candidates (id, source) VALUES (?, ?)",
-                    [(u, s.term) for u in chunk],
-                )
-                new += cur.rowcount
+                new += self._add_candidates(chunk, s.term)
         self.con.execute(
             "INSERT OR REPLACE INTO searches (term, purpose, count, truncated, done, updated_at)"
             " VALUES (?, ?, ?, ?, 1, datetime('now'))",
@@ -137,10 +146,7 @@ class Harvester:
                              root.word, len(todo), len(todo[0].rstrip("*")) - len(root.word))
                 for word, (s, ids) in zip(todo, pool.map(lambda w: self._probe(full_term(w, root.filter)), todo)):
                     n_queries += 1
-                    self.con.executemany(
-                        "INSERT OR IGNORE INTO candidates (id, source) VALUES (?, ?)",
-                        [(u, s.term) for u in ids],
-                    )
+                    self._add_candidates(ids, s.term)
                     # A truncated search's UIDs are a subset of its children's:
                     # record the split and collect nothing from it.
                     self.con.execute(

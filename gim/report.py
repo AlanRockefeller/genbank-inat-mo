@@ -21,17 +21,48 @@ LOW_RANKS = {
 }
 _SKIP_WORDS = {"uncultured", "cf.", "aff.", "nr.", "unidentified", "fungal", "fungi"}
 
+# Status codes (CSV `status` column) and the plain-English label shown in the
+# HTML report, summary.txt and the CSV `status_text` column. Every code says
+# what it is about: the accession, or the observation itself.
 STATUS_TEXT = {
-    "linked": "Observation lists this accession",
-    "mentioned": "Accession only in notes/description/comments",
-    "missing_has_seq": "Observation has a sequence but not this accession",
-    "missing_no_seq": "Observation has no sequence or accession",
-    "not_found": "Observation does not exist (wrong number or deleted)",
-    "not_returned": "MO did not return it (merged into another observation?)",
-    "error": "Lookup failed",
-    "unchecked": "Not looked up yet",
+    "accession_listed": "OK: observation lists this accession",
+    "accession_in_text": "OK: accession is in the observation's notes or comments",
+    "accession_missing_has_sequence": "Observation exists and has a sequence, but not this GenBank accession",
+    "accession_missing_no_sequence": "Observation exists, but has no sequence or GenBank accession",
+    "observation_not_found": "Observation does not exist (wrong number in GenBank, or deleted)",
+    "observation_not_returned": "MO knows the number but returned no observation (merged into another?)",
+    "lookup_error": "Lookup failed; run verify again",
+    "unchecked": "Not looked up yet; run verify",
 }
-PROBLEM = {"missing_has_seq", "missing_no_seq", "not_found", "not_returned"}
+PROBLEM = {
+    "accession_missing_has_sequence",
+    "accession_missing_no_sequence",
+    "observation_not_found",
+    "observation_not_returned",
+}
+# obs.status (as stored by verify) -> report status.
+_OBS_STATUS = {"not_found": "observation_not_found", "not_returned": "observation_not_returned", "error": "lookup_error"}
+
+
+def what_to_do(status: str, accession: str, site: str, taxon_check: str, doubtful: bool) -> str:
+    """One-line suggested action for a report row."""
+    acc = accession.split(".")[0]
+    field = "a 'Genbank Accession Number' observation field" if site == "inat" else "the observation's sequence record"
+    if doubtful:
+        return "Probably not an MO number (MO is also a herbarium code); check the GenBank record"
+    if status == "accession_missing_has_sequence":
+        return f"Add {acc} to {field}"
+    if status == "accession_missing_no_sequence":
+        return f"Add the sequence and {acc} to {field}"
+    if status == "observation_not_found":
+        return "Check the observation number in the GenBank record (typo, or the observation was deleted)"
+    if status == "observation_not_returned":
+        return "Find the observation it was merged into and add the accession there"
+    if taxon_check == "different_genus":
+        return "Accession is linked; check the identification or the observation number"
+    if status in ("lookup_error", "unchecked"):
+        return "Run gim verify"
+    return ""
 
 
 def obs_url(site: str, oid: int) -> str:
@@ -82,15 +113,15 @@ def build_rows(con: sqlite3.Connection) -> list[dict]:
         if st is None:
             status = "unchecked"
         elif st != "found":
-            status = st
+            status = _OBS_STATUS.get(st, "lookup_error")
         elif acc in seq:
-            status = "linked"
+            status = "accession_listed"
         elif acc in txt:
-            status = "mentioned"
+            status = "accession_in_text"
         elif x["has_sequence"]:
-            status = "missing_has_seq"
+            status = "accession_missing_has_sequence"
         else:
-            status = "missing_no_seq"
+            status = "accession_missing_no_sequence"
         kinds = set((x["kinds"] or "").split(","))
         kind = "mo_explicit" if "mo_explicit" in kinds else ("inat" if "inat" in kinds else "mo_prefix")
         tcheck = taxon_check(x["organism"], x["taxon"] or "", x["rank"] or "") if st == "found" else ""
@@ -98,17 +129,21 @@ def build_rows(con: sqlite3.Connection) -> list[dict]:
         # a different genus without the accession, is probably not an MO number
         # (e.g. a Missouri Botanical Garden herbarium number).
         doubtful = kind == "mo_prefix" and (
-            status == "not_found" or (status.startswith("missing") and tcheck == "different_genus")
+            status == "observation_not_found"
+            or (status.startswith("accession_missing") and tcheck == "different_genus")
         )
         detail = json.loads(x["detail"] or "{}")
+        accession = x["version"] or x["accession"]
         rows.append(
             {
-                "accession": x["version"] or x["accession"],
+                "accession": accession,
                 "organism": x["organism"],
                 "site": x["site"],
                 "obs_id": x["obs_id"],
                 "obs_url": obs_url(x["site"], x["obs_id"]),
                 "status": status,
+                "status_text": STATUS_TEXT[status],
+                "what_to_do": what_to_do(status, accession, x["site"], tcheck, doubtful),
                 "obs_taxon": x["taxon"] or "",
                 "taxon_check": tcheck,
                 "match_kind": kind,
@@ -204,22 +239,53 @@ def write(con: sqlite3.Connection, out: Path) -> dict:
     return stats
 
 
+SITE_TEXT = {"inat": "iNaturalist", "mo": "Mushroom Observer"}
+TAXON_TEXT = {
+    "same_genus": "Same genus",
+    "different_genus": "Different genus",
+    "obs_above_genus": "Observation only identified above genus",
+    "not_comparable": "Can't compare",
+    "": "",
+}
+KIND_TEXT = {
+    "inat": "iNaturalist number",
+    "mo_explicit": "Named as Mushroom Observer / MUOB",
+    "mo_prefix": "Bare “MO” prefix",
+}
+
+# (header, function of row -> cell HTML)
+def _link(url: str, text) -> str:
+    return f'<a href="{html.escape(url)}">{html.escape(str(text))}</a>'
+
+
+_COLUMNS = [
+    ("GenBank record", lambda r: _link(f"https://www.ncbi.nlm.nih.gov/nuccore/{r['accession']}", r["accession"])),
+    ("GenBank organism", lambda r: html.escape(r["organism"] or "")),
+    ("Site", lambda r: SITE_TEXT[r["site"]]),
+    ("Observation", lambda r: _link(r["obs_url"], r["obs_id"])),
+    ("Problem", lambda r: html.escape(r["status_text"])),
+    ("What to do", lambda r: html.escape(r["what_to_do"])),
+    ("Observation taxon", lambda r: html.escape(r["obs_taxon"])),
+    ("Genus check", lambda r: TAXON_TEXT.get(r["taxon_check"], r["taxon_check"])),
+    ("Accessions on observation", lambda r: html.escape(r["obs_accessions"] or "none")),
+    ("Observer", lambda r: html.escape(r["obs_user"])),
+    ("How GenBank cites it", lambda r: html.escape(f"{KIND_TEXT.get(r['match_kind'], r['match_kind'])}: {r['genbank_text']}")),
+]
+
+
 def _html(stats: dict, summary_lines: list[str], problems: list[dict]) -> str:
-    cols = ["accession", "organism", "site", "obs_id", "status", "obs_taxon", "taxon_check",
-            "match_kind", "doubtful", "obs_accessions", "obs_user", "genbank_text"]
-    def cell(r, c):
-        v = r[c]
-        if c == "accession":
-            return f'<a href="https://www.ncbi.nlm.nih.gov/nuccore/{html.escape(str(v))}">{html.escape(str(v))}</a>'
-        if c == "obs_id":
-            return f'<a href="{r["obs_url"]}">{v}</a>'
-        if c == "status":
-            return f'<span title="{html.escape(STATUS_TEXT.get(v, v))}">{html.escape(v)}</span>'
-        return html.escape(str(v or ""))
-    body = "\n".join(
-        "<tr>" + "".join(f"<td>{cell(r, c)}</td>" for c in cols) + "</tr>" for r in problems
+    def row(r: dict) -> str:
+        attrs = (
+            f' data-site="{r["site"]}" data-status="{r["status"]}"'
+            f' data-taxon="{r["taxon_check"]}" data-doubtful="{"1" if r["doubtful"] else ""}"'
+        )
+        return f"<tr{attrs}>" + "".join(f"<td>{fn(r)}</td>" for _, fn in _COLUMNS) + "</tr>"
+
+    body = "\n".join(row(r) for r in problems)
+    head = "".join(f"<th>{h}</th>" for h, _ in _COLUMNS)
+    status_opts = "".join(
+        f'<option value="{k}">{html.escape(STATUS_TEXT[k])}</option>' for k in STATUS_TEXT if k in PROBLEM
     )
-    head = "".join(f"<th>{c}</th>" for c in cols)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -237,14 +303,19 @@ table {{ border-collapse:collapse; font-size:13px; }}
 th, td {{ border-bottom:1px solid var(--line); padding:4px 8px; text-align:left; vertical-align:top; }}
 th {{ background:var(--head); position:sticky; top:0; cursor:pointer; }}
 td:last-child {{ color:var(--muted); max-width:420px; }}
+td:nth-child(5), td:nth-child(6) {{ min-width:220px; }}
+.note {{ color:var(--muted); max-width:760px; }}
 </style></head><body>
 <h1>GenBank records citing iNaturalist / Mushroom Observer</h1>
 <pre>{html.escape(chr(10).join(summary_lines))}</pre>
 <h1>Problems ({len(problems)})</h1>
+<p class="note">Each row is one GenBank record that cites an observation. “Problem” says what is wrong
+with the observation's link back to that record; a different genus is listed even when the
+accession is linked. Click a column header to sort.</p>
 <input id="q" placeholder="Filter text…" size="30">
-<select id="site"><option value="">All sites</option><option>inat</option><option>mo</option></select>
-<select id="st"><option value="">All statuses</option>{"".join(f"<option>{k}</option>" for k in STATUS_TEXT if k in PROBLEM)}<option value="different_genus">different_genus</option></select>
-<label><input type="checkbox" id="hide"> hide doubtful MO matches</label>
+<select id="site"><option value="">All sites</option><option value="inat">iNaturalist</option><option value="mo">Mushroom Observer</option></select>
+<select id="st"><option value="">All problems</option>{status_opts}<option value="different_genus">Different genus</option></select>
+<label><input type="checkbox" id="hide"> hide doubtful bare-“MO” matches</label>
 <div class="wrap"><table id="t"><thead><tr>{head}</tr></thead><tbody>
 {body}
 </tbody></table></div>
@@ -252,8 +323,8 @@ td:last-child {{ color:var(--muted); max-width:420px; }}
 const rows=[...document.querySelectorAll('#t tbody tr')];
 function f(){{const q=document.getElementById('q').value.toLowerCase(),s=document.getElementById('site').value,
 st=document.getElementById('st').value,h=document.getElementById('hide').checked;
-for(const r of rows){{const c=r.cells;let ok=(!s||c[2].textContent===s)&&(!h||c[8].textContent!=='yes');
-if(st)ok=ok&&(c[4].textContent===st||c[6].textContent===st);
+for(const r of rows){{const d=r.dataset;let ok=(!s||d.site===s)&&(!h||!d.doubtful);
+if(st)ok=ok&&(d.status===st||d.taxon===st);
 if(q)ok=ok&&r.textContent.toLowerCase().includes(q);r.style.display=ok?'':'none';}}}}
 for(const id of ['q','site','st','hide'])document.getElementById(id).addEventListener('input',f);
 document.querySelectorAll('#t th').forEach((th,i)=>th.addEventListener('click',()=>{{

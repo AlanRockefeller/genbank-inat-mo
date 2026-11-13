@@ -79,15 +79,22 @@ produces no reference.
 
 ## Report statuses
 
+Each row of the report is one GenBank record and the observation it cites.
+The CSVs have a `status` code, its plain-English `status_text` (which is
+what the HTML report shows), and a `what_to_do` suggestion.
+
 | status | meaning |
 |---|---|
-| `linked` | the observation lists the accession (iNat observation field, MO sequence record) |
-| `mentioned` | the accession is only in notes, description or comments |
-| `missing_has_seq` | the observation has a sequence or DNA barcode field but not this accession |
-| `missing_no_seq` | the observation has no sequence and no accession |
-| `not_found` | the observation does not exist: wrong number in GenBank, or deleted |
-| `not_returned` | MO knows the number but returns another observation (merged occurrence) |
+| `accession_listed` | OK: the observation lists the accession (iNat observation field, MO sequence record) |
+| `accession_in_text` | OK: the accession is only in notes, description or comments |
+| `accession_missing_has_sequence` | the observation exists and has a sequence or DNA barcode field, but not this accession |
+| `accession_missing_no_sequence` | the observation exists, but has no sequence and no accession |
+| `observation_not_found` | the observation does not exist: wrong number in GenBank, or deleted |
+| `observation_not_returned` | MO knows the number but returns no observation for it (merged into another) |
+
+Only the `observation_*` statuses mean the observation itself is missing; the
+`accession_missing_*` ones mean it exists and just lacks the link back.
 
 `taxon_check` compares genera (`different_genus` is often just a name change,
 but also catches a mistyped number). `problems.csv` holds every row that is
-not `linked`/`mentioned`, plus genus mismatches.
+not OK, plus genus mismatches.

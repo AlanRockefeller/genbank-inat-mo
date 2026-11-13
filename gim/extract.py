@@ -58,16 +58,20 @@ class Ref:
     snippet: str
 
 
-_ZIP_BEFORE = re.compile(r",\s*$")
+# A city name right before the comma: "St. Louis, MO", "Cape Girardeau,MO".
+# A comma alone is not enough: "DUKE 12345, MO 68404" is a list of vouchers.
+_ZIP_BEFORE = re.compile(r"\b[A-Z][a-z][A-Za-z.'\-]*,\s*$")
 _ZIP_AFTER = re.compile(r"^(?:-\d{4}\b|,?\s*(?:USA|U\.S\.A\.|United States)\b)")
 
 
 def _is_zip(text: str, m: re.Match) -> bool:
     """'St. Louis, MO 63108, USA': a Missouri ZIP code in an address (NCBI puts
-    submitter addresses in COMMENT and REFERENCE), not an MO observation."""
+    submitter addresses in COMMENT and REFERENCE), not an MO observation.
+    Needs address evidence: ZIP+4, USA after it, or a city name and comma before."""
     if len(m.group(1)) != 5:
         return False
-    return bool(_ZIP_BEFORE.search(text[max(0, m.start() - 3) : m.start()]) or _ZIP_AFTER.match(text[m.end() :]))
+    before = text[max(0, m.start() - 40) : m.start()]
+    return bool(_ZIP_BEFORE.search(before) or _ZIP_AFTER.match(text[m.end() :]))
 
 
 def _snippet(text: str, m: re.Match, width: int = 40) -> str:

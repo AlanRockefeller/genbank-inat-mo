@@ -21,6 +21,9 @@ def test_mo_forms():
     assert refs("Mushroom Observer MO 123456") == [("mo", 123456, "mo_explicit")]
     for s in ("voucher MO411618 small", "mo411618", "MO_411618", "MO # 411618", "MO-411618", "MO obs. #411618"):
         assert refs(s) == [("mo", 411618, "mo_prefix")], s
+    # A five-digit MO number after a comma is not a ZIP code without an address.
+    assert refs("specimen vouchers: DUKE 12345, MO 68404") == [("mo", 68404, "mo_prefix")]
+    assert refs("DUKE, MO 68404") == [("mo", 68404, "mo_prefix")]
 
 
 def test_rejects():

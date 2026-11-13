@@ -39,6 +39,10 @@ PROBLEM = {
     "accession_missing_no_sequence",
     "observation_not_found",
     "observation_not_returned",
+    # Not checked yet, or the lookup failed: listed so a clean-looking report
+    # never hides observations nobody has actually checked.
+    "lookup_error",
+    "unchecked",
 }
 # obs.status (as stored by verify) -> report status.
 _OBS_STATUS = {"not_found": "observation_not_found", "not_returned": "observation_not_returned", "error": "lookup_error"}

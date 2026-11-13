@@ -97,4 +97,5 @@ Only the `observation_*` statuses mean the observation itself is missing; the
 
 `taxon_check` compares genera (`different_genus` is often just a name change,
 but also catches a mistyped number). `problems.csv` holds every row that is
-not OK, plus genus mismatches.
+not OK (including observations not looked up yet, or whose lookup failed),
+plus genus mismatches.
